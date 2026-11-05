@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>..\..\icons\app.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AION2实时翻译</AssemblyName>
+    <RootNamespace>AionTranslator.UI</RootNamespace>
+    <LangVersion>latest</LangVersion>
+
+    <!-- 读游戏内存必须要管理员权限，双击就自动弹 UAC，省得别人不知道要右键运行 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 发布参数：自包含单文件，目标机器不用装 .NET -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- WinForms 只为托盘图标，别让它污染全局 using -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AionTranslator.Core\AionTranslator.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="prompt\system-prompt.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>
