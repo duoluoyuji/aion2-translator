@@ -12,7 +12,7 @@ into 11 languages for copying or typing into the in-game chat.
   selectable in Settings (Simplified Chinese by default)
 - **12 chat target languages / 11 manual-strip target languages** (see "Supported languages")
 - **Recordable overlay**: shows up normally in OBS / NVIDIA replay / screenshots
-- **Manual translation strip (F9)**: Chinese → English / Japanese; copy or push into the chat box
+- **Manual translation strip (F9)**: translate your own messages into English / Japanese / Korean and 8 more; copy or push into the chat box
 - **Quick phrases**: one click fills the input box and copies to clipboard
 - **Channel colors**: speaker names are colored per channel; Chinese messages are shown as-is
   and never sent to the API
@@ -67,7 +67,6 @@ Output: `src\AionTranslator.UI\bin\Release\net10.0-windows\win-x64\publish\AION2
    and also copies it to the clipboard
 
 Technical handover (Chinese): [docs/交接文档.md](docs/交接文档.md).
-Reverse-engineering notes for the send channel: [docs/快捷发送方案.md](docs/快捷发送方案.md).
 
 ## Risks and disclaimer
 
