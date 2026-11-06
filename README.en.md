@@ -1,14 +1,16 @@
 # AION2 Live Translator (unofficial)
 
-A small Windows tool that reads the chat log of **AION 2** from the game process memory,
-translates foreign messages into Chinese in an overlay, and can translate your own Chinese text
-into English/Japanese for copying or typing into the in-game chat.
+A small Windows tool that reads the chat log of **AION 2** from the game process memory and translates
+it into the language you choose, shown in an overlay. It can also translate your own messages
+into 11 languages for copying or typing into the in-game chat.
 
 > Unofficial project. Not affiliated with, authorized by, or endorsed by NCSOFT / AION 2.
 
 ## Features
 
-- **Live chat translation** for world / race / nearby / party channels
+- **Live chat translation** for world / race / nearby / party channels; the target language is
+  selectable in Settings (Simplified Chinese by default)
+- **12 chat target languages / 11 manual-strip target languages** (see "Supported languages")
 - **Recordable overlay**: shows up normally in OBS / NVIDIA replay / screenshots
 - **Manual translation strip (F9)**: Chinese → English / Japanese; copy or push into the chat box
 - **Quick phrases**: one click fills the input box and copies to clipboard
@@ -16,6 +18,18 @@ into English/Japanese for copying or typing into the in-game chat.
   and never sent to the API
 - **One endpoint is enough**: keyless public endpoint by default, or any OpenAI-compatible service
   (SiliconFlow / DeepSeek / custom)
+
+## Supported languages
+
+**Game chat target (12)**: Simplified Chinese, Traditional Chinese, English, Japanese, Korean, Russian,
+Spanish, French, German, Portuguese, Thai, Vietnamese
+
+**Manual strip target (11)**: English, Japanese, Korean, Traditional Chinese, Russian, Spanish, French,
+German, Portuguese, Thai, Vietnamese
+
+> The "Send" button appears only when the target language is **English**; other languages show "Copy",
+> because the in-game chat box only reliably accepts ASCII.
+> Messages already written in Chinese are shown as-is and never sent to the API.
 
 ## Requirements
 
