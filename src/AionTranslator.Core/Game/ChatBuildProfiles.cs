@@ -28,6 +28,16 @@ public sealed record ChatBuildProfile(
     public bool RelaxedLayout { get; init; }
 }
 
+public static class ChatBuildProfileCatalog
+{
+    public static IEnumerable<ChatBuildProfile> All => ChatBuildProfiles.All;
+
+    public const string RootGetter = ChatBuildProfiles.RootGetterPattern;
+
+    /// <summary>把特征码字符串编译成 (字节, 掩码)，供诊断工具使用。</summary>
+    public static (byte[] Pattern, byte[] Mask) CompilePattern(string pattern) => ChatBuildProfiles.Compile(pattern);
+}
+
 internal static class ChatBuildProfiles
 {
     public static readonly ChatBuildProfile Steam20261024 = new(
@@ -42,7 +52,21 @@ internal static class ChatBuildProfiles
         427474944UL, 254841896UL, 248052000UL, 248052020UL, 254446488UL, 230191584UL,
         209459712UL, 209455616UL, 224633096UL, 151251312UL, 230211624UL);
 
-    public static IEnumerable<ChatBuildProfile> All => new[] { Steam20261024, Steam20261028 };
+    /// <summary>
+    /// 紫P（PURPLE）登录器渠道、2026-11-07 实测的一台机器：
+    /// 特征码可命中，但 Vtable/Class 位置与 Steam 版不同，因此标记为宽松布局（不做 vtable 校验）。
+    /// 数值来自 probe-log：RootGetter=151498448 Weak=255086616 Count=248289716 Chunks=248289696。
+    /// </summary>
+    public static readonly ChatBuildProfile Purple20261107 = new ChatBuildProfile(
+        "PURPLE-20261107",
+        "a650524f5dc93d5ffbb23c567b98225d56fb22a936f53dc5e6e1116316b51e3b",
+        427851776UL, 255086616UL, 248289696UL, 248289716UL,
+        0, 0, 0, 0, 0, 151498448UL, 0)
+    {
+        RelaxedLayout = true,
+    };
+
+    public static IEnumerable<ChatBuildProfile> All => new[] { Steam20261024, Steam20261028, Purple20261107 };
 
     public const string RootGetterPattern =
         "44 8B 0D ?? ?? ?? ?? 45 85 C9 74 4A 48 8B 05 ?? ?? ?? ?? 85 C0 78 3F 3B 05 ?? ?? ?? ?? 7D 37 44 8B C0 49 C1 E8 10 0F B7 C0 48 8D 14 40 48 8B 05 ?? ?? ?? ?? 4A 8B 0C C0 4C 8D 04 D1 4D 85 C0 74 15 45 39 48 10 75 0F 41 8B 40 08 A9 00 00 20 30 75 04 49 8B 00 C3 33 C0 C3";

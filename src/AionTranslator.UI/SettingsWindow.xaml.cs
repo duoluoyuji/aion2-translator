@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using AionTranslator.Core;
+using AionTranslator.Core.Game;
 
 namespace AionTranslator.UI;
 
@@ -80,6 +81,47 @@ public partial class SettingsWindow : Window
         "【手动条按钮】\n" +
         "复制：点一下，译文进剪贴板，到游戏聊天里粘贴发出。\n" +
         "发送：目标语言是英语时出现。先在游戏里按回车打开聊天框，点「发送」，译文进框后按回车发出。";
+    /// <summary>导出诊断包：模块镜像 + 环境信息 + 日志，压成一个 zip，方便玩家回传。</summary>
+    private async void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        DiagButton.IsEnabled = false;
+        DiagStatus.Text = "正在读取游戏内存…（约 400 MB，需要几十秒）";
+        var work = Path.Combine(Path.GetTempPath(), "aion2-diag-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(work);
+        try
+        {
+            var ok = await Task.Run(() =>
+            {
+                var dump = GameDiagnostics.TryDumpModuleImage(Path.Combine(work, "image.bin"), out var summary, out var err);
+                if (dump) File.WriteAllText(Path.Combine(work, "env.txt"), summary, new System.Text.UTF8Encoding(false));
+                else File.WriteAllText(Path.Combine(work, "env.txt"), "dump failed: " + err, new System.Text.UTF8Encoding(false));
+                return dump;
+            });
+
+            var log = Path.Combine(AppPaths.DataDir, "app.log");
+            if (File.Exists(log)) File.Copy(log, Path.Combine(work, "app.log"), true);
+            File.WriteAllText(Path.Combine(work, "profiles.txt"),
+                string.Join(Environment.NewLine, AionTranslator.Core.Game.ChatBuildProfileCatalog.All.Select(p =>
+                    p.Name + "  sha256=" + p.ImageSha256 + "  image=" + p.ImageBytes)),
+                new System.Text.UTF8Encoding(false));
+
+            var zipPath = Path.Combine(AppPaths.DataDir, "诊断-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
+            if (File.Exists(zipPath)) File.Delete(zipPath);
+            System.IO.Compression.ZipFile.CreateFromDirectory(work, zipPath);
+            DiagStatus.Text = ok ? "已导出：" + zipPath : "导出失败，见 env.txt";
+            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + zipPath + "\""); } catch { }
+        }
+        catch (Exception ex)
+        {
+            DiagStatus.Text = "导出失败：" + ex.Message;
+            AppLog.Write("export diagnostics failed: " + ex);
+        }
+        finally
+        {
+            try { Directory.Delete(work, true); } catch { }
+            DiagButton.IsEnabled = true;
+        }
+    }
     public Settings Settings { get; private set; }
 
     /// <summary>
@@ -138,6 +180,8 @@ public partial class SettingsWindow : Window
             FontSlider.ValueChanged += (_, e) => FontText.Text = (int)e.NewValue + " 号";
             ImeCompatBox.IsChecked = Settings.OverlayImeCompat;
             OneKeySendBox.IsChecked = Settings.OneKeySend;
+        StartupRecentBox.Text = Settings.StartupRecentMessages.ToString();
+        NoiseChannelsBox.IsChecked = Settings.TranslateNoiseChannels;
         QuickPhrasesBox.Text = string.Join(Environment.NewLine, Settings.QuickPhrases ?? new List<string>());
             HistoryBox.Text = Settings.MaxHistory.ToString();
             PromptPathText.Text = EffectivePromptPath();
@@ -424,6 +468,9 @@ public partial class SettingsWindow : Window
             Settings.OverlayFontSize = (int)Math.Round(FontSlider.Value);
             Settings.OverlayImeCompat = ImeCompatBox.IsChecked == true;
             Settings.OneKeySend = OneKeySendBox.IsChecked == true;
+        if (int.TryParse(StartupRecentBox.Text.Trim(), out var startupRecent))
+            Settings.StartupRecentMessages = Math.Clamp(startupRecent, 0, 200);
+        Settings.TranslateNoiseChannels = NoiseChannelsBox.IsChecked == true;
         Settings.QuickPhrases = (QuickPhrasesBox.Text ?? "")
             .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
             .Select(s => s.Trim())

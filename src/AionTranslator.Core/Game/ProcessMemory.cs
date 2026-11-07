@@ -3,10 +3,23 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AionTranslator.Core.Game;
 
-/// <summary>只读取进程内存，带可读区间校验，读不到就返回 false。</summary>
-internal sealed class ProcessMemory : IDisposable
+/// <summary>
+/// 只读取进程内存。关键点：按内存区域逐段读取 —— 游戏模块由上百个大小不一的区域拼成，
+/// “整段跨区域一次读完”会失败，导致明明能读的地方读不到（历史上多次因此误判“找不到特征码”）。
+/// </summary>
+public sealed class ProcessMemory : IDisposable
 {
-    private readonly SafeProcessHandle _handle;
+    private const uint PageNoAccess = 0x01;
+    private const uint PageGuard = 0x100;
+    private const uint MemCommit = 0x1000;
+
+    private SafeProcessHandle _handle;
+
+    /// <summary>最近一次读取失败的系统错误码（5=拒绝访问，常见于反作弊回收句柄权限）。</summary>
+    public int LastError { get; private set; }
+
+    /// <summary>换一个进程句柄（权限被回收后重新 OpenProcess 用）。</summary>
+    public void ReplaceHandle(SafeProcessHandle handle) => _handle = handle;
 
     public ProcessMemory(SafeProcessHandle handle) => _handle = handle;
 
@@ -14,38 +27,30 @@ internal sealed class ProcessMemory : IDisposable
     {
         get
         {
-            try
-            {
-                return Win32.GetExitCodeProcess(_handle, out var code) && code == 259;
-            }
-            catch
-            {
-                return false;
-            }
+            try { return Win32.GetExitCodeProcess(_handle, out var code) && code == 259; }
+            catch { return false; }
         }
     }
 
-    private bool IsReadable(ulong address, int size)
+    private static bool IsAddressValid(ulong address) => address >= 0x10000 && address <= 0x7FFF_FFFF_FFFFUL;
+
+    private bool Query(ulong address, out Win32.MemoryBasicInformation info)
     {
-        if (address < 0x10000 || address > 0x7FFF_FFFF_FFFFUL) return false;
-        if (size <= 0 || size > 4 * 1024 * 1024) return false;
-        if (address > 0x7FFF_FFFF_FFFFUL - (ulong)size) return false;
-
-        var queried = Win32.VirtualQueryEx(_handle, (IntPtr)(long)address, out var info, (IntPtr)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MemoryBasicInformation>());
-        if (queried == IntPtr.Zero) return false;
-        var committed = (info.State & Win32.MemCommit) != 0;
-        var noAccess = (info.Protect & Win32.PageNoAccess) != 0;
-        var guard = (info.Protect & Win32.PageGuard) != 0;
-        if (!committed || noAccess || guard) return false;
-
-        var regionEnd = (ulong)info.BaseAddress.ToInt64() + (ulong)info.RegionSize.ToInt64();
-        return address + (ulong)size <= regionEnd;
+        info = default;
+        if (!IsAddressValid(address)) return false;
+        var size = (IntPtr)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MemoryBasicInformation>();
+        return Win32.VirtualQueryEx(_handle, (IntPtr)(long)address, out info, size) != IntPtr.Zero;
     }
 
-    public bool Read(ulong address, Span<byte> buffer)
+    private static bool IsReadableRegion(in Win32.MemoryBasicInformation info) =>
+        (info.State & MemCommit) != 0 &&
+        (info.Protect & PageNoAccess) == 0 &&
+        (info.Protect & PageGuard) == 0;
+
+    /// <summary>在单个区域内读一段（长度由调用方保证不超过区域剩余长度）。</summary>
+    private bool ReadWithinRegion(ulong address, Span<byte> buffer)
     {
         if (buffer.Length == 0) return false;
-        if (!IsReadable(address, buffer.Length)) return false;
         var array = new byte[buffer.Length];
         if (Win32.ReadProcessMemory(_handle, (IntPtr)(long)address, array, array.Length, out var read) &&
             read.ToInt64() == array.Length)
@@ -53,7 +58,47 @@ internal sealed class ProcessMemory : IDisposable
             array.CopyTo(buffer);
             return true;
         }
+        LastError = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
         return false;
+    }
+
+    /// <summary>直接读（不做区域检查）：有些页 VirtualQueryEx 报的状态和实际可读性不一致，先试再说。</summary>
+    private bool TryDirectRead(ulong address, Span<byte> buffer)
+    {
+        if (!IsAddressValid(address) || buffer.Length == 0) return false;
+        return ReadWithinRegion(address, buffer);
+    }
+
+    /// <summary>读任意长度：先直接读；失败再按区域逐段读；都失败才算失败（带重试）。</summary>
+    public bool Read(ulong address, Span<byte> buffer)
+    {
+        if (buffer.Length == 0) return false;
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (TryDirectRead(address, buffer)) return true;
+            if (ReadByRegions(address, buffer)) return true;
+            if (attempt < 2) Thread.Sleep(3);
+        }
+        return false;
+    }
+
+    private bool ReadByRegions(ulong address, Span<byte> buffer)
+    {
+        var offset = 0;
+        var cursor = address;
+        while (offset < buffer.Length)
+        {
+            if (!Query(cursor, out var info)) return false;
+            if (!IsReadableRegion(info)) return false;
+            var regionEnd = (ulong)info.BaseAddress.ToInt64() + (ulong)info.RegionSize.ToInt64();
+            if (cursor >= regionEnd) return false;
+            var want = (int)Math.Min((ulong)(buffer.Length - offset), regionEnd - cursor);
+            if (!ReadWithinRegion(cursor, buffer.Slice(offset, want))) return false;
+            offset += want;
+            cursor += (ulong)want;
+        }
+        return true;
     }
 
     public bool Read(ulong address, byte[] buffer) => Read(address, buffer.AsSpan());
@@ -78,47 +123,57 @@ internal sealed class ProcessMemory : IDisposable
 
     public bool IsPointer(ulong value) => value >= 0x10000 && value < 0x7FFF_FFFF_FFFFUL && (value & 7) == 0;
 
-    /// <summary>在模块范围内按字节模式（支持 ?? 通配）搜索，返回绝对地址。</summary>
+    /// <summary>按字节模式（支持 ?? 通配）搜索，返回绝对地址。逐区域扫描，某段读失败只跳过该段。</summary>
     public ulong? FindPattern(ulong start, ulong end, byte[] pattern, byte[] mask, int maxBytes = 512 * 1024 * 1024)
     {
-        const int chunkSize = 4 * 1024 * 1024;
-        var buffer = new byte[chunkSize + pattern.Length];
-        var address = start;
+        if (pattern.Length == 0) return null;
+        const int chunkSize = 2 * 1024 * 1024;
+        var overlap = pattern.Length - 1;
+        var buffer = new byte[chunkSize + overlap];
         long scanned = 0;
+        var address = start;
+
         while (address < end && scanned < maxBytes)
         {
-            if (Win32.VirtualQueryEx(_handle, (IntPtr)(long)address, out var info, (IntPtr)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MemoryBasicInformation>()) == IntPtr.Zero) break;
+            if (!Query(address, out var info)) break;
             var regionStart = (ulong)info.BaseAddress.ToInt64();
             var regionSize = (ulong)info.RegionSize.ToInt64();
+            if (regionSize == 0) break;
             var regionEnd = regionStart + regionSize;
-            var committed = (info.State & Win32.MemCommit) != 0;
-            var readable = committed && (info.Protect & Win32.PageNoAccess) == 0 && (info.Protect & Win32.PageGuard) == 0;
-            if (readable)
+
+            if (IsReadableRegion(info))
             {
                 var cursor = Math.Max(address, regionStart);
                 while (cursor < regionEnd && scanned < maxBytes)
                 {
                     var size = (int)Math.Min((ulong)chunkSize, regionEnd - cursor);
+                    if (size <= 0) break;
                     if (size < pattern.Length) break;
-                    var block = new byte[size + pattern.Length];
-                    if (!Read(cursor, block.AsSpan(0, size))) break;
+                    var span = buffer.AsSpan(0, size);
+                    if (!TryDirectRead(cursor, span) && !ReadWithinRegion(cursor, span))
+                    {
+                        cursor += (ulong)size;   // 这一段读失败：跳过，继续后面，别整轮放弃
+                        continue;
+                    }
                     for (var i = 0; i + pattern.Length <= size; i++)
                     {
                         var hit = true;
                         for (var j = 0; j < pattern.Length; j++)
                         {
                             if (mask[j] == 0) continue;
-                            if (block[i + j] != pattern[j]) { hit = false; break; }
+                            if (buffer[i + j] != pattern[j]) { hit = false; break; }
                         }
                         if (hit) return cursor + (ulong)i;
                     }
-                    cursor += (ulong)size;
                     scanned += size;
+                    cursor += (ulong)size;
                 }
             }
+
             address = regionEnd;
         }
         return null;
     }
+
     public void Dispose() => _handle.Dispose();
 }

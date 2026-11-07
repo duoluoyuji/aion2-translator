@@ -13,6 +13,10 @@ public sealed class GameChatSource : IChatSource, IDisposable
     private string _status = "未连接";
     private string _lastNote = "";
     private bool _primed;
+    /// <summary>启动时每个频道最多翻多少条历史（0=不翻历史）。</summary>
+    private int _startupRecent = 0;
+
+    public void SetStartupRecent(int count) => _startupRecent = Math.Max(0, count);
     private byte _channelCode;
 
     public event Action<IncomingChat>? Message;
@@ -97,9 +101,12 @@ public sealed class GameChatSource : IChatSource, IDisposable
         if (!_primed)
         {
             _primed = true;
-            messages = messages.GroupBy(m => m.ChannelCode)
-                .SelectMany(g => g.Skip(Math.Max(0, g.Count() - 8)))
-                .ToList();
+            // 首轮历史裁剪：默认 0 条 —— 只从“启动之后的新消息”开始翻译，避免开软件就灌几百条给 AI
+            messages = _startupRecent <= 0
+                ? new List<GameMessage>()
+                : messages.GroupBy(m => m.ChannelCode)
+                    .SelectMany(g => g.Skip(Math.Max(0, g.Count() - _startupRecent)))
+                    .ToList();
         }
         foreach (var message in messages)
         {

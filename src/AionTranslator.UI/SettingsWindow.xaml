@@ -60,9 +60,15 @@
 
 
 
+                <CheckBox x:Name="NoiseChannelsBox" Margin="0,10,0,0"
+                          Content="也翻译 NPC / 系统 / 战斗记录频道（默认不翻，省额度）"/>
                 <CheckBox x:Name="OneKeySendBox" Margin="0,10,0,0"
                           Content="一键发送（仅支持英文输入，需要聊天窗口打开输入）"/>
 
+                <TextBlock Text="启动时只翻译最近多少条历史（0 = 不翻历史，只翻启动后的新消息）" Foreground="#FF68748F" Margin="0,12,0,4"/>
+                <TextBox x:Name="StartupRecentBox" Height="28" VerticalContentAlignment="Center" Padding="6" Width="80"
+                         HorizontalAlignment="Left"
+                         ToolTip="填 0：开软件时不翻译任何历史消息，避免一次灌几百条给 AI。填 20：每个频道只翻最近 20 条。"/>
                 <TextBlock Text="快捷用语（每行一条，显示在手动条最上方）" Foreground="#FF68748F" Margin="0,12,0,4"/>
                 <TextBox x:Name="QuickPhrasesBox" Height="72" AcceptsReturn="True" TextWrapping="NoWrap"
                          VerticalScrollBarVisibility="Auto" Padding="6"
@@ -81,6 +87,12 @@
                     <TextBlock x:Name="PromptPathText" Grid.Column="0" Foreground="#FF8A93A8" FontSize="12" TextWrapping="NoWrap"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                     <Button Grid.Column="1" Content="打开提示词" Height="24" Padding="10,0" Margin="8,0,0,0" Click="OpenPromptButton_Click"/>
+                <TextBlock Text="连不上游戏时：先开游戏进角色，再点这里导出诊断包" Foreground="#FF68748F" Margin="0,12,0,4"/>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="DiagButton" Content="导出诊断包" Height="26" Padding="12,0" Click="ExportDiagnostics_Click"
+                            Background="#FF2F6BFF" Foreground="White" BorderThickness="0"/>
+                    <TextBlock x:Name="DiagStatus" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="#FF8A93A8"/>
+                </StackPanel>
                     </Grid>
             </StackPanel>
         </ScrollViewer>

@@ -12,6 +12,10 @@ public sealed class Aion2GameReader : IDisposable
 {
     private static readonly UnicodeEncoding Utf16 = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
 
+    private ChatStructureLocator.Location? _chatLocation;
+    private DateTime _lastHandleRenew = DateTime.MinValue;
+    private int _handleRenewMaskIndex;
+
     private readonly SafeProcessHandle _handle;
     private readonly ProcessMemory _memory;
 
@@ -208,6 +212,13 @@ public sealed class Aion2GameReader : IDisposable
             foreach (var profile in ChatBuildProfiles.All)
             {
                 if (!profile.ImageSha256.Equals(sha, StringComparison.OrdinalIgnoreCase)) continue;
+                if (profile.RelaxedLayout)
+                {
+                    // 宽松布局：偏移来自实测，跳过 vtable/class 校验（这两个值本来就为 0）
+                    matched = profile;
+                    DiagLog?.Invoke("命中已实测的宽松布局：" + profile.Name);
+                    break;
+                }
                 if (ValidateProfile(memory, baseAddress, imageBytes, profile, out reason))
                 {
                     matched = profile;
@@ -217,6 +228,15 @@ public sealed class Aion2GameReader : IDisposable
             }
             if (matched is null)
             {
+                // 本机缓存：这台客户端的布局以前成功定位过，直接复用，不再扫描代码段
+                var cached = ChatProfileCache.Find(sha);
+                if (cached is not null && cached.ImageBytes == imageBytes)
+                {
+                    var cacheProfile = ChatProfileCache.ToProfile(cached);
+                    DiagLog?.Invoke("使用本机缓存布局：" + cacheProfile.Name + "（" + cached.SavedAt + "）");
+                    return new Aion2GameReader(handle, pid, baseAddress, imageBytes, cacheProfile, "已连接 AION2 · 缓存布局");
+                }
+
                 var located = LocateByPattern(memory, baseAddress, imageBytes, sha, out var locateReason);
                 if (located is null)
                 {
@@ -227,6 +247,18 @@ public sealed class Aion2GameReader : IDisposable
                 }
                 matched = located;
                 DiagLog?.Invoke("已按特征码自动定位布局：" + matched.Name);
+                ChatProfileCache.Save(new ChatProfileCache.Entry
+                {
+                    Sha256 = sha,
+                    Name = matched.Name,
+                    ImageBytes = imageBytes,
+                    RootGetterRva = matched.RootGetterRva,
+                    WeakRva = matched.WeakRva,
+                    CountRva = matched.CountRva,
+                    ChunksRva = matched.ChunksRva,
+                    OwnerOffset = 1208,
+                    TableOffset = 48,
+                });
             }
 
             var status = "已连接 AION2 · " + matched.Name;
@@ -248,15 +280,52 @@ public sealed class Aion2GameReader : IDisposable
                           ?? ChatBuildProfiles.Steam20261028;
 
         var (pattern, mask) = ChatBuildProfiles.Compile(ChatBuildProfiles.RootGetterPattern);
-        var hit = memory.FindPattern(baseAddress, baseAddress + imageBytes, pattern, mask);
-        if (hit is null)
+
+        // ① 先按已知 profile 的 RootGetter 位置直接读（最省、最稳）：命中就不用全模块扫描
+        ulong? hit = null;
+        foreach (var known in ChatBuildProfiles.All)
         {
-            DiagLog?.Invoke("模块范围没找到，改为全进程扫描");
-            hit = memory.FindPattern(0x10000, 0x7FFF_FFFF_FFFFUL, pattern, mask, 1024 * 1024 * 1024);
+            if (known.RootGetterRva == 0 || known.RootGetterRva + 89 >= imageBytes) continue;
+            var probe = new byte[89];
+            if (!memory.Read(baseAddress + known.RootGetterRva, probe)) continue;
+            if (!ChatBuildProfiles.MatchPattern(probe, ChatBuildProfiles.RootGetterPattern)) continue;
+            hit = baseAddress + known.RootGetterRva;
+            DiagLog?.Invoke("按已知位置命中 RootGetter：" + known.Name + " RVA=0x" + known.RootGetterRva.ToString("X"));
+            break;
         }
+
+        // ② 再在已知位置附近 ±128KB 里找（换渠道/例行维护通常只是轻微挪动）
         if (hit is null)
         {
-            reason = "模块和整个进程里都找不到聊天系统入口的特征码";
+            foreach (var known in ChatBuildProfiles.All)
+            {
+                if (known.RootGetterRva == 0) continue;
+                var from = (ulong)Math.Max(0, (long)known.RootGetterRva - 0x100000);
+                var to = Math.Min(imageBytes, known.RootGetterRva + 0x100000);
+                var near = memory.FindPattern(baseAddress + from, baseAddress + to, pattern, mask, 8 * 1024 * 1024);
+                if (near is not null)
+                {
+                    hit = near;
+                    DiagLog?.Invoke("已知位置邻域命中 RootGetter：RVA=0x" + (near.Value - baseAddress).ToString("X"));
+                    break;
+                }
+            }
+        }
+
+        // ③ 最后才全模块扫描，再不行才全进程
+        if (hit is null)
+        {
+            hit = memory.FindPattern(baseAddress, baseAddress + imageBytes, pattern, mask);
+            if (hit is null)
+            {
+                DiagLog?.Invoke("模块范围没找到，改为全进程扫描");
+                hit = memory.FindPattern(0x10000, 0x7FFF_FFFF_FFFFUL, pattern, mask, 1024 * 1024 * 1024);
+            }
+        }
+
+        if (hit is null)
+        {
+            reason = "聊天系统入口特征码定位失败（已知位置、邻域、全模块、全进程都没命中）";
             return null;
         }
 
@@ -412,7 +481,7 @@ public sealed class Aion2GameReader : IDisposable
 
     public IReadOnlyList<GameMessage> Snapshot()
     {
-        var snapshot = ReadChatHeader();
+        var snapshot = ReadChatHeaderWithRetry();
         if (snapshot is null)
         {
             LastSnapshotNote = "聊天结构读取失败（" + LastHeaderError + "）";
@@ -664,12 +733,61 @@ public sealed class Aion2GameReader : IDisposable
 
     private string LastHeaderError = "";
 
+    private ChatSnapshot? ReadChatHeaderWithRetry()
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var snap = ReadChatHeader();
+            if (snap is not null) return snap;
+            if (attempt < 2) Thread.Sleep(40);
+        }
+        return null;
+    }
+
     private ChatSnapshot? ReadChatHeader()
     {
         var baseAddress = ImageBase;
 
         var weak = new byte[8];
-        if (!_memory.Read(baseAddress + Profile.WeakRva, weak)) { LastHeaderError = "读不到全局指针"; return null; }
+        var weakOk = false;
+        for (var attempt = 0; attempt < 10 && !weakOk; attempt++)
+        {
+            weakOk = _memory.Read(baseAddress + Profile.WeakRva, weak);
+            if (weakOk) break;
+
+            var readErr = _memory.LastError;
+            if (attempt == 0) DiagLog?.Invoke("读取全局指针失败：Win32 错误 " + readErr);
+
+            // 反作弊可能回收句柄的读权限：错误 5 时重新打开进程再试
+            if ((readErr == 5 || readErr == 6) && (DateTime.UtcNow - _lastHandleRenew).TotalMilliseconds > 500)
+            {
+                try
+                {
+                    // 轮换访问掩码：QUERY_INFORMATION 有时会踩到反作弊，换 LIMITED / 只读掩码反而能读
+                    var masks = new[]
+                    {
+                        Win32.ProcessVmRead | Win32.ProcessQueryInformation,
+                        Win32.ProcessVmRead | Win32.ProcessQueryLimitedInformation,
+                        Win32.ProcessVmRead,
+                    };
+                    var accessMask = masks[_handleRenewMaskIndex % masks.Length];
+                    _handleRenewMaskIndex++;
+                    var fresh = Win32.OpenProcess(accessMask, false, ProcessId);
+                    if (!fresh.IsInvalid)
+                    {
+                        _memory.ReplaceHandle(fresh);
+                        _lastHandleRenew = DateTime.UtcNow;
+                        DiagLog?.Invoke("已重新打开进程句柄后重试（原错误 " + readErr + "，掩码 0x" + accessMask.ToString("X") + "）");
+                    }
+                }
+                catch
+                {
+                    // 重开失败就继续退避重试
+                }
+            }
+            Thread.Sleep(40);
+        }
+        if (!weakOk) { LastHeaderError = "读不到全局指针（错误 " + _memory.LastError + "）"; return null; }
         var index = BinaryPrimitives.ReadInt32LittleEndian(weak);
         var serial = BinaryPrimitives.ReadInt32LittleEndian(weak.AsSpan(4));
 
@@ -677,9 +795,9 @@ public sealed class Aion2GameReader : IDisposable
         if (index < 0 || index >= count || count > 3_000_000 || serial <= 0) { LastHeaderError = "索引/序号异常 index=" + index + " count=" + count + " serial=" + serial; return null; }
 
         if (!_memory.ReadU64(baseAddress + Profile.ChunksRva, out var chunks)) { LastHeaderError = "读不到区块表"; return null; }
-        if (!_memory.IsPointer(chunks)) return null;
-        if (!_memory.ReadU64(chunks + (ulong)((long)(index >> 16) * 8), out var map)) return null;
-        if (!_memory.IsPointer(map)) return null;
+        if (!_memory.IsPointer(chunks)) { LastHeaderError = "区块表指针无效"; return null; }
+        if (!_memory.ReadU64(chunks + (ulong)((long)(index >> 16) * 8), out var map)) { LastHeaderError = "读不到区块 map"; return null; }
+        if (!_memory.IsPointer(map)) { LastHeaderError = "区块 map 指针无效"; return null; }
 
         var slotAddress = map + (ulong)((long)(index & 0xFFFF) * 24);
         var slot = new byte[24];
@@ -694,12 +812,42 @@ public sealed class Aion2GameReader : IDisposable
         if (!_memory.Read(owner, ownerHeader)) return null;
         if (BinaryPrimitives.ReadInt32LittleEndian(ownerHeader.AsSpan(12)) != index) return null;
 
-        if (!_memory.ReadU64(owner + 1208, out var chat)) { LastHeaderError = "读不到聊天对象"; return null; }
+        // 聊天对象的偏移不再写死：先用上次命中的偏移，失败再按“频道表结构”现场扫描
+        ulong chat = 0;
+        var tableOffset = 0;
+        if (_chatLocation is not null)
+        {
+            chat = _chatLocation.Chat;
+            tableOffset = _chatLocation.TableOffset;
+        }
+        else
+        {
+            var located = ChatStructureLocator.Find(_memory, owner);
+            if (located is not null)
+            {
+                _chatLocation = located;
+                chat = located.Chat;
+                tableOffset = located.TableOffset;
+                DiagLog?.Invoke("结构定位成功：owner+" + located.OwnerOffset + " chat=0x" + chat.ToString("X") +
+                                " table+" + located.TableOffset + " (" + located.Note + ", score=" + located.Score + ")");
+            }
+            else if (_memory.ReadU64(owner + 1208, out var fallbackChat) && _memory.IsPointer(fallbackChat))
+            {
+                // 结构扫描失败时退回原偏移，至少保持旧版本可用
+                chat = fallbackChat;
+                tableOffset = 48;
+            }
+            else
+            {
+                LastHeaderError = "结构定位失败：owner 附近没有像聊天频道表的数据块";
+                return null;
+            }
+        }
         if (!_memory.IsPointer(chat)) return null;
 
         var chatHeader = new byte[40];
         if (!_memory.Read(chat, chatHeader)) return null;
-        if (!Profile.RelaxedLayout)
+        if (!Profile.RelaxedLayout && Profile.VtableRva != 0 && Profile.ClassRva != 0)
         {
             if (BinaryPrimitives.ReadUInt64LittleEndian(chatHeader) != baseAddress + Profile.VtableRva) return null;
             if (!_memory.ReadU64(baseAddress + Profile.ClassRva, out var classPtr)) return null;
@@ -708,7 +856,12 @@ public sealed class Aion2GameReader : IDisposable
         }
 
         var table = new byte[80];
-        if (!_memory.Read(chat + 48, table)) { LastHeaderError = "读不到频道表"; return null; }
+        if (!_memory.Read(chat + (ulong)tableOffset, table)) { LastHeaderError = "读不到频道表"; return null; }
+        if (tableOffset != 48 && ChatStructureLocator.ScoreTable(_memory, table, out _) <= 0)
+        {
+            LastHeaderError = "频道表结构校验失败（偏移 " + tableOffset + "）";
+            return null;
+        }
 
         var entriesPtr = BinaryPrimitives.ReadUInt64LittleEndian(table);
         var maskPtr = BinaryPrimitives.ReadUInt64LittleEndian(table.AsSpan(32));
@@ -754,7 +907,7 @@ public sealed class Aion2GameReader : IDisposable
             channels[code] = new ChannelInfo(code, address, used, capacity);
         }
 
-        if (channels.Count != channelsUsed - removed) return null;
+        if (channels.Count != channelsUsed - removed) { LastHeaderError = "频道数不符（解析 " + channels.Count + "，期望 " + (channelsUsed - removed) + "）"; return null; }
 
         var tabs = new byte[16];
         if (!_memory.Read(chat + 208, tabs)) return null;

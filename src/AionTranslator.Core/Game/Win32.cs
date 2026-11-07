@@ -4,7 +4,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AionTranslator.Core.Game;
 
-internal static class Win32
+public static class Win32
 {
     public const uint ProcessQueryInformation = 0x0400;
     public const uint ProcessQueryLimitedInformation = 0x1000;

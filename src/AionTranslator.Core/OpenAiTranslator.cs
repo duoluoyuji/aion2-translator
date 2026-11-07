@@ -179,6 +179,18 @@ public sealed class OpenAiTranslator : IDisposable
                             continue;
                         }
 
+                        // 防错位：模型偶尔会把 id 顺序搞乱/多吐 id，一旦发现不属于本批的 id，整批丢弃，
+                        // 否则译文会被贴到别的消息上（出现过“位置”变成“突突”这种完全不相干的译文）。
+                        var chunkIds = chunk.Select(x => x.Id).ToHashSet();
+                        var stray = parsed.Keys.Where(k => !chunkIds.Contains(k)).ToList();
+                        if (stray.Count > 0)
+                        {
+                            lastError = provider.Name + ": 模型返回了不属于本批的 id（疑似错位），已丢弃该批";
+                            Log?.Invoke(provider.Name + " 丢弃错位批次，越界 id=" + string.Join(",", stray.Take(5)));
+                            parsed.Clear();
+                            continue;
+                        }
+
                         var map = new Dictionary<int, TranslationOutcome>();
                         foreach (var line in chunk)
                         {

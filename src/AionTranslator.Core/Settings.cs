@@ -74,6 +74,12 @@ public sealed class Settings
     public string SourceMode { get; set; } = "游戏内存";
     /// <summary>主窗口保留的对话条数（只存在内存，超出丢最旧）。</summary>
     public int MaxHistory { get; set; } = 50;
+
+    /// <summary>启动时只翻译每个频道最近 N 条历史（0 = 历史一条都不翻，只翻启动之后的新消息）。</summary>
+    public int StartupRecentMessages { get; set; } = 0;
+
+    /// <summary>是否翻译 NPC/系统/战斗记录等刷屏频道（默认否，省额度）。</summary>
+    public bool TranslateNoiseChannels { get; set; }
     /// <summary>输入法兼容模式：关闭悬浮窗的透明合成，某些第三方输入法（豆包等）打不进字时用。</summary>
     public bool OverlayImeCompat { get; set; }
     /// <summary>一键发送：手动条上的按钮把译文自动输入到游戏聊天框（仅英文可靠），你再自己按回车发出。</summary>

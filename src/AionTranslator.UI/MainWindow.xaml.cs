@@ -57,7 +57,12 @@ public partial class MainWindow : Window
 
     private readonly ConcurrentQueue<IncomingChat> _queue = new();
     private IChatSource _source = new GameChatSource();
-    private IChatSource CreateSource() => new GameChatSource();
+    private IChatSource CreateSource()
+    {
+        var source = new GameChatSource();
+        source.SetStartupRecent(CurrentSettings.StartupRecentMessages);
+        return source;
+    }
     private readonly System.Windows.Threading.DispatcherTimer _flushTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
 
     internal Settings CurrentSettings;
@@ -69,6 +74,7 @@ public partial class MainWindow : Window
     private int _skippedSameLanguage;
     private string _settingsPath = "";
     private int _filteredOut;
+    private int _noiseDropped;
     private DateTime _lastFilterLog = DateTime.MinValue;
 
     public MainWindow()
@@ -76,6 +82,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         ChatList.ItemsSource = SharedRows;
         AionTranslator.Core.Game.Aion2GameReader.DiagLog = Log;
+        AionTranslator.Core.Game.ChatProfileCache.Configure(System.IO.Path.Combine(AppPaths.DataDir, "discovered-layout.json"));
         ChatSender.ChatSnapshot = () => (_source as GameChatSource)?.RecentTexts() ?? (IReadOnlyList<string>)Array.Empty<string>();
         CurrentSettings = AppPaths.LoadSettings(out var settingsPath);
         _settingsPath = settingsPath;
@@ -245,6 +252,14 @@ public partial class MainWindow : Window
         return total > 0 && cjk * 100 / total >= 30;
     }
 
+    /// <summary>NPC、系统、战斗记录这类刷屏频道：默认不翻译，否则会把翻译额度全吃掉。</summary>
+    private static bool IsNoiseChannel(string channel) => channel switch
+    {
+        "NPC" or "伤害" or "恢复" or "状态" or "系统" or "战斗记录" or "获得物品"
+            or "队伍系统" or "部队系统" or "军团系统" or "其他系统" or "社交动作" => true,
+        _ => false,
+    };
+
     private void OnMessage(IncomingChat chat)
     {
         // 中文（目标语言）不翻译，但照样进队列、照样显示，免得漏看信息
@@ -258,6 +273,12 @@ public partial class MainWindow : Window
                 _lastFilterLog = now;
                 Log("频道筛选「" + filter + "」已丢弃 " + _filteredOut + " 条其它频道消息（要看全部请把频道切到「全部」）");
             }
+            return;
+        }
+        // NPC / 系统 / 战斗记录这类频道是刷屏噪音：默认不进翻译队列（设置里可打开）
+        if (!CurrentSettings.TranslateNoiseChannels && IsNoiseChannel(chat.Channel))
+        {
+            _noiseDropped++;
             return;
         }
         _queue.Enqueue(chat);
