@@ -14,6 +14,7 @@ public sealed class Aion2GameReader : IDisposable
 
     private ChatStructureLocator.Location? _chatLocation;
     private DateTime _lastHandleRenew = DateTime.MinValue;
+    private DateTime _lastLocateAttempt = DateTime.MinValue;
     private int _handleRenewMaskIndex;
 
     private readonly SafeProcessHandle _handle;
@@ -822,6 +823,14 @@ public sealed class Aion2GameReader : IDisposable
         }
         else
         {
+            // 定位失败时退避 3 秒再试：全量结构扫描要读几千次内存，每 400ms 扫一次会把机器拖卡
+            if ((DateTime.UtcNow - _lastLocateAttempt).TotalSeconds < 3)
+            {
+                LastHeaderError = "结构定位退避中";
+                return null;
+            }
+            _lastLocateAttempt = DateTime.UtcNow;
+
             var located = ChatStructureLocator.Find(_memory, owner);
             if (located is not null)
             {

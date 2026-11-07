@@ -134,11 +134,22 @@ public sealed class OpenAiTranslator : IDisposable
         var target = string.IsNullOrWhiteSpace(targetOverride) ? _settings.TargetLanguage : targetOverride!;
         bool needMultiLanguage = !string.Equals(target, "简体中文", StringComparison.Ordinal);
 
-        var providers = _settings.Providers
-            .Where(p => p.Usable)
+        // 只使用设置里选中的那一条通道：选了大模型就必须有 Key，不会偷偷回退到免费通道
+        var wantedName = !string.IsNullOrWhiteSpace(preferredProvider) ? preferredProvider! : _settings.Provider;
+        var all = _settings.Providers
             .Where(p => !needMultiLanguage || p.TargetLanguageCapable)
-            .OrderBy(p => p.Priority)
             .ToList();
+        var selected = all.FirstOrDefault(p => p.Name.Equals(wantedName, StringComparison.Ordinal));
+        var providers = new List<Provider>();
+        if (selected is not null)
+        {
+            providers.Add(selected);
+        }
+        else
+        {
+            // 没找到同名通道（老配置/名字写错）才退回“可用通道”列表
+            providers.AddRange(all.Where(p => p.Usable).OrderBy(p => p.Priority));
+        }
 
         // 手动翻译可以单独指定走哪个通道（例如聊天用 B站求快、手动翻译用大模型求多语言）
         if (!string.IsNullOrWhiteSpace(preferredProvider))
@@ -175,7 +186,14 @@ public sealed class OpenAiTranslator : IDisposable
                         var parsed = Parse(raw, chunk);
                         if (parsed.Count == 0)
                         {
-                            lastError = provider.Name + ": 返回内容无法解析为 JSON";
+                            // 长术语库/复杂指令有时会让模型输出非 JSON：用极简提示词重试一次
+                            Log?.Invoke(provider.Name + " 解析失败，改用极简提示词重试");
+                            var retryRaw = await CallAsync(provider, apiKey, chunk, target, ct, minimalPrompt: true).ConfigureAwait(false);
+                            parsed = Parse(retryRaw, chunk);
+                        }
+                        if (parsed.Count == 0)
+                        {
+                            lastError = provider.Name + ": 返回内容无法解析（多半是提示词太长把格式带偏，或接口限流）";
                             continue;
                         }
 
@@ -242,14 +260,14 @@ public sealed class OpenAiTranslator : IDisposable
         return failed;
     }
 
-    private async Task<string> CallAsync(Provider provider, string apiKey, List<ChatLine> chunk, string target, CancellationToken ct)
+    private async Task<string> CallAsync(Provider provider, string apiKey, List<ChatLine> chunk, string target, CancellationToken ct, bool minimalPrompt = false)
     {
         var payload = new Dictionary<string, object?>
         {
             ["model"] = provider.Model,
             ["messages"] = new object[]
             {
-                new { role = "system", content = BuildSystemPrompt(target) },
+                new { role = "system", content = minimalPrompt ? "把下面这个 JSON 里每条聊天翻译成" + target + "，只输出一个 JSON 对象，键保持不变，值是译文，不要解释。" : BuildSystemPrompt(target) },
                 new { role = "user", content = BuildUserPayload(chunk) },
             },
             ["temperature"] = provider.Temperature,
@@ -333,6 +351,14 @@ public sealed class OpenAiTranslator : IDisposable
               .Append("要求：口语、自然、符合游戏语境；专有名词（副本、Boss、技能）保持玩家通用叫法。\n")
               .Append("只输出一个 JSON 对象：键与输入完全相同，值是").Append(target).Append("译文。\n")
               .Append("不要输出 markdown 代码块，不要任何解释或原文对照。\n");
+            // 翻成外语时提示词文件也要起作用：把其中的术语/规则当“译名参考”带进去，
+            // 否则用户改了 prompt\system-prompt.txt 也不生效（之前只在中译时用到它）。
+            var termRef = BasePrompt();
+            if (!string.IsNullOrWhiteSpace(termRef) && termRef.Length > 40)
+            {
+                if (termRef.Length > 4000) termRef = termRef[..4000];
+                sb.Append("\n【术语与译名参考（照此翻译专有名词，输出仍然只给 JSON）】\n").Append(termRef).Append('\n');
+            }
         }
 
         if (_settings.Glossary.Count > 0)

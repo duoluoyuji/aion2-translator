@@ -102,11 +102,10 @@ public sealed class GameChatSource : IChatSource, IDisposable
         {
             _primed = true;
             // 首轮历史裁剪：默认 0 条 —— 只从“启动之后的新消息”开始翻译，避免开软件就灌几百条给 AI
+            // 按“总量”截取：只取最近 N 条，而不是每个频道各取 N 条
             messages = _startupRecent <= 0
                 ? new List<GameMessage>()
-                : messages.GroupBy(m => m.ChannelCode)
-                    .SelectMany(g => g.Skip(Math.Max(0, g.Count() - _startupRecent)))
-                    .ToList();
+                : messages.Skip(Math.Max(0, messages.Count - _startupRecent)).ToList();
         }
         foreach (var message in messages)
         {

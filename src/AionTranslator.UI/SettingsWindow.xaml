@@ -33,7 +33,6 @@
 
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="测试通道" Height="28" Padding="14,0" Click="TestButton_Click" Background="#FF2F6BFF" Foreground="White" BorderThickness="0"/>
-                    <Button Content="复制诊断信息" Height="28" Padding="14,0" Margin="8,0,0,0" Click="CopyDiagButton_Click"/>
                     <TextBlock x:Name="TestResultText" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#FF4C5872" FontSize="12" TextWrapping="Wrap" MaxWidth="260"/>
                 </StackPanel>
 
@@ -83,17 +82,18 @@
 
                 <TextBlock Text="提示词文件（可自己改术语译名）" Foreground="#FF68748F" Margin="0,12,0,4"/>
                 <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <TextBlock x:Name="PromptPathText" Grid.Column="0" Foreground="#FF8A93A8" FontSize="12" TextWrapping="NoWrap"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                     <Button Grid.Column="1" Content="打开提示词" Height="24" Padding="10,0" Margin="8,0,0,0" Click="OpenPromptButton_Click"/>
-                <TextBlock Text="连不上游戏时：先开游戏进角色，再点这里导出诊断包" Foreground="#FF68748F" Margin="0,12,0,4"/>
+                </Grid>
+
+                <TextBlock Text="连不上游戏 / 出问题时：先开游戏进角色、点过开始翻译，再点下面这个，复制出来的文字直接发给作者" Foreground="#FF68748F" Margin="0,12,0,4"/>
                 <StackPanel Orientation="Horizontal">
-                    <Button x:Name="DiagButton" Content="导出诊断包" Height="26" Padding="12,0" Click="ExportDiagnostics_Click"
+                    <Button x:Name="DiagButton" Content="复制诊断信息" Height="26" Padding="12,0" Click="ExportDiagnostics_Click"
                             Background="#FF2F6BFF" Foreground="White" BorderThickness="0"/>
                     <TextBlock x:Name="DiagStatus" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="#FF8A93A8"/>
                 </StackPanel>
-                    </Grid>
             </StackPanel>
         </ScrollViewer>
 

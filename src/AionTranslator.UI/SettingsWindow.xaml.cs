@@ -81,45 +81,49 @@ public partial class SettingsWindow : Window
         "【手动条按钮】\n" +
         "复制：点一下，译文进剪贴板，到游戏聊天里粘贴发出。\n" +
         "发送：目标语言是英语时出现。先在游戏里按回车打开聊天框，点「发送」，译文进框后按回车发出。";
-    /// <summary>导出诊断包：模块镜像 + 环境信息 + 日志，压成一个 zip，方便玩家回传。</summary>
-    private async void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
+    /// <summary>复制诊断信息：环境 + 日志尾巴，纯文本，直接发给作者。</summary>
+    private void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
     {
-        DiagButton.IsEnabled = false;
-        DiagStatus.Text = "正在读取游戏内存…（约 400 MB，需要几十秒）";
-        var work = Path.Combine(Path.GetTempPath(), "aion2-diag-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(work);
         try
         {
-            var ok = await Task.Run(() =>
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("=== AION2 实时翻译 诊断信息 ===");
+            sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine("程序版本: " + typeof(SettingsWindow).Assembly.GetName().Version);
+            sb.AppendLine("系统: " + Environment.OSVersion.VersionString + " / x64");
+            sb.AppendLine("设置: 目标语言=" + Settings.TargetLanguage + "，通道=" + Settings.Provider +
+                          "，启动翻历史=" + Settings.StartupRecentMessages + "，翻NPC频道=" + Settings.TranslateNoiseChannels);
+            sb.AppendLine("日志文件: " + System.IO.Path.Combine(AppPaths.DataDir, "app.log"));
+
+            var logPath = System.IO.Path.Combine(AppPaths.DataDir, "app.log");
+            if (File.Exists(logPath))
             {
-                var dump = GameDiagnostics.TryDumpModuleImage(Path.Combine(work, "image.bin"), out var summary, out var err);
-                if (dump) File.WriteAllText(Path.Combine(work, "env.txt"), summary, new System.Text.UTF8Encoding(false));
-                else File.WriteAllText(Path.Combine(work, "env.txt"), "dump failed: " + err, new System.Text.UTF8Encoding(false));
-                return dump;
-            });
+                var lines = File.ReadAllLines(logPath);
+                var tail = lines.Skip(Math.Max(0, lines.Length - 120)).ToArray();
+                sb.AppendLine();
+                sb.AppendLine("=== app.log 最后 " + tail.Length + " 行 ===");
+                foreach (var line in tail) sb.AppendLine(line);
+            }
+            else
+            {
+                sb.AppendLine();
+                sb.AppendLine("（没有找到 app.log，说明程序还没运行过）");
+            }
 
-            var log = Path.Combine(AppPaths.DataDir, "app.log");
-            if (File.Exists(log)) File.Copy(log, Path.Combine(work, "app.log"), true);
-            File.WriteAllText(Path.Combine(work, "profiles.txt"),
-                string.Join(Environment.NewLine, AionTranslator.Core.Game.ChatBuildProfileCatalog.All.Select(p =>
-                    p.Name + "  sha256=" + p.ImageSha256 + "  image=" + p.ImageBytes)),
-                new System.Text.UTF8Encoding(false));
+            var text = sb.ToString();
+            var savePath = System.IO.Path.Combine(AppPaths.DataDir, "诊断信息.txt");
+            File.WriteAllText(savePath, text, new System.Text.UTF8Encoding(true));
 
-            var zipPath = Path.Combine(AppPaths.DataDir, "诊断-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            System.IO.Compression.ZipFile.CreateFromDirectory(work, zipPath);
-            DiagStatus.Text = ok ? "已导出：" + zipPath : "导出失败，见 env.txt";
-            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + zipPath + "\""); } catch { }
+            var copied = false;
+            try { copied = ChatSender.CopyToClipboard(text); } catch { }
+            DiagStatus.Text = copied
+                ? "已复制到剪贴板（Ctrl+V 发给作者即可），同时存了一份：" + savePath
+                : "已保存到 " + savePath + "（剪贴板被占用，请用记事本打开复制）";
+            try { System.Diagnostics.Process.Start("notepad.exe", savePath); } catch { }
         }
         catch (Exception ex)
         {
-            DiagStatus.Text = "导出失败：" + ex.Message;
-            AppLog.Write("export diagnostics failed: " + ex);
-        }
-        finally
-        {
-            try { Directory.Delete(work, true); } catch { }
-            DiagButton.IsEnabled = true;
+            DiagStatus.Text = "生成诊断信息失败：" + ex.Message;
         }
     }
     public Settings Settings { get; private set; }
