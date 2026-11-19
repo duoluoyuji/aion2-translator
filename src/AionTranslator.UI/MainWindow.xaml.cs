@@ -98,7 +98,7 @@ public partial class MainWindow : Window
 
         _source = CreateSource();
         _source.Message += OnMessage;
-        _source.Note += note => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = note));
+        _source.Note += note => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = "读取：" + note));
         _flushTimer.Tick += async (_, _) => await FlushAsync();
         Closed += (_, _) =>
         {
@@ -111,6 +111,15 @@ public partial class MainWindow : Window
                 // 关闭悬浮窗失败不影响退出
             }
         };
+        // 版本号从程序集读，避免界面写死后忘改
+        try
+        {
+            var v = typeof(MainWindow).Assembly.GetName().Version;
+            var ver = v is null ? "" : " v" + v.Major + "." + v.Minor + "." + v.Build;
+            Title = "AION2 实时翻译" + ver + " · @吃素的佩奇";
+        }
+        catch { }
+
         SetupTray();
         StateChanged += (_, _) =>
         {
@@ -233,7 +242,7 @@ public partial class MainWindow : Window
     private OpenAiTranslator CreateTranslator()
     {
         var translator = new OpenAiTranslator(CurrentSettings);
-        translator.Log += m => Dispatcher.BeginInvoke(() => StatusText.Text = m);
+        translator.Log += m => Log("译文: " + m);
         return translator;
     }
 
@@ -362,7 +371,7 @@ public partial class MainWindow : Window
                 }
                 (_source as GameChatSource)?.SetChannelName(_channelFilter);
                 _flushTimer.Start();
-                StatusText.Text = _source.Status;
+                StatusText.Text = "连接：" + _source.Status;
                 Log("source started: " + _source.Status);
             }
             else

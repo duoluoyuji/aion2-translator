@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -19,7 +20,12 @@ public partial class App : System.Windows.Application
             args.Handled = true;
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
-            AppLog.Write("后台未处理异常: " + args.ExceptionObject);
+        {
+            var text = "后台未处理异常（进程即将退出）: " + args.ExceptionObject + Environment.NewLine +
+                       "时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            AppLog.Write(text);
+            try { File.WriteAllText(Path.Combine(AppPaths.DataDir, "崩溃.log"), text, new System.Text.UTF8Encoding(true)); } catch { }
+        };
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
             AppLog.Write("未观察任务异常: " + args.Exception);

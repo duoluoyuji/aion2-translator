@@ -84,7 +84,7 @@ public sealed class GameChatSource : IChatSource, IDisposable
                 }
                 try
                 {
-                    await Task.Delay(400, token).ConfigureAwait(false);
+                    await Task.Delay(800, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

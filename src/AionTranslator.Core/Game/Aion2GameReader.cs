@@ -16,6 +16,9 @@ public sealed class Aion2GameReader : IDisposable
     private DateTime _lastHandleRenew = DateTime.MinValue;
     private DateTime _lastLocateAttempt = DateTime.MinValue;
     private int _handleRenewMaskIndex;
+    private int _reopenCount;
+    private int _locateFailures;
+    private DateTime _reopenWindowStart = DateTime.MinValue;
 
     private readonly SafeProcessHandle _handle;
     private readonly ProcessMemory _memory;
@@ -760,7 +763,14 @@ public sealed class Aion2GameReader : IDisposable
             if (attempt == 0) DiagLog?.Invoke("读取全局指针失败：Win32 错误 " + readErr);
 
             // 反作弊可能回收句柄的读权限：错误 5 时重新打开进程再试
-            if ((readErr == 5 || readErr == 6) && (DateTime.UtcNow - _lastHandleRenew).TotalMilliseconds > 500)
+            if ((DateTime.UtcNow - _reopenWindowStart).TotalSeconds > 60)
+            {
+                _reopenWindowStart = DateTime.UtcNow;
+                _reopenCount = 0;
+            }
+            if ((readErr == 5 || readErr == 6)
+                && (DateTime.UtcNow - _lastHandleRenew).TotalSeconds > 5
+                && _reopenCount < 12)
             {
                 try
                 {
@@ -778,6 +788,7 @@ public sealed class Aion2GameReader : IDisposable
                     {
                         _memory.ReplaceHandle(fresh);
                         _lastHandleRenew = DateTime.UtcNow;
+                        _reopenCount++;
                         DiagLog?.Invoke("已重新打开进程句柄后重试（原错误 " + readErr + "，掩码 0x" + accessMask.ToString("X") + "）");
                     }
                 }
@@ -824,7 +835,9 @@ public sealed class Aion2GameReader : IDisposable
         else
         {
             // 定位失败时退避 3 秒再试：全量结构扫描要读几千次内存，每 400ms 扫一次会把机器拖卡
-            if ((DateTime.UtcNow - _lastLocateAttempt).TotalSeconds < 3)
+            var backoffSeconds = _locateFailures switch { 0 => 3, 1 => 10, _ => 30 };
+            if (_locateFailures >= 3 && (DateTime.UtcNow - _lastLocateAttempt).TotalSeconds < 60) backoffSeconds = 60;
+            if ((DateTime.UtcNow - _lastLocateAttempt).TotalSeconds < backoffSeconds)
             {
                 LastHeaderError = "结构定位退避中";
                 return null;
@@ -835,6 +848,7 @@ public sealed class Aion2GameReader : IDisposable
             if (located is not null)
             {
                 _chatLocation = located;
+                _locateFailures = 0;
                 chat = located.Chat;
                 tableOffset = located.TableOffset;
                 DiagLog?.Invoke("结构定位成功：owner+" + located.OwnerOffset + " chat=0x" + chat.ToString("X") +
@@ -848,6 +862,7 @@ public sealed class Aion2GameReader : IDisposable
             }
             else
             {
+                _locateFailures++;
                 LastHeaderError = "结构定位失败：owner 附近没有像聊天频道表的数据块";
                 return null;
             }

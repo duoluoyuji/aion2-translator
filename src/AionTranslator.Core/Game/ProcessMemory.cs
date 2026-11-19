@@ -19,7 +19,13 @@ public sealed class ProcessMemory : IDisposable
     public int LastError { get; private set; }
 
     /// <summary>换一个进程句柄（权限被回收后重新 OpenProcess 用）。</summary>
-    public void ReplaceHandle(SafeProcessHandle handle) => _handle = handle;
+    /// <summary>换一个进程句柄。旧句柄必须释放，否则长时间运行会泄漏内核句柄（数量一满就全盘失效，只能重启）。</summary>
+    public void ReplaceHandle(SafeProcessHandle handle)
+    {
+        var old = _handle;
+        _handle = handle;
+        try { old?.Dispose(); } catch { }
+    }
 
     public ProcessMemory(SafeProcessHandle handle) => _handle = handle;
 

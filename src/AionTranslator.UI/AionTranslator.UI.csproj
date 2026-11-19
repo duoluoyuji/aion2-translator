@@ -10,6 +10,9 @@
     <AssemblyName>AION2实时翻译</AssemblyName>
     <RootNamespace>AionTranslator.UI</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <Version>1.1.1</Version>
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+    <FileVersion>1.1.1.0</FileVersion>
 
     <!-- 读游戏内存必须要管理员权限，双击就自动弹 UAC，省得别人不知道要右键运行 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
